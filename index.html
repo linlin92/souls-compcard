@@ -176,30 +176,38 @@ button.ghost{background:transparent;border-color:var(--line2);color:var(--gold)}
     return split;
   }
   function slotRects(runs, band, px) {
-    return runs.map((run, k) => {
+    const measured = runs.map((run, k) => {
       const prev = k > 0 ? runs[k - 1] : null;
       const next = k + 1 < runs.length ? runs[k + 1] : null;
-      const edge = Math.round(px.w * 0.03);
-      const leftGap = prev ? (run.x - (prev.x + prev.w)) / 2 : edge;
-      const rightGap = next ? (next.x - (run.x + run.w)) / 2 : edge;
-      const x0 = run.x - leftGap;
-      const ww = run.w + leftGap + rightGap;
-      let side, sx, sy;
-      if (k === 0) {
-        const top = band.y - band.h * 0.42;
-        const bot = band.y + band.h + band.h * 0.50;
-        side = bot - top;
-        sx = run.x + run.w / 2 - side / 2;
-        sy = top;
-        const maxRight = next ? next.x - 2 : px.w;
-        if (sx + side > maxRight) sx = maxRight - side;
-      } else {
-        side = Math.max(ww, band.h + 8);
-        sx = x0 + ww / 2 - side / 2;
-        sy = band.y + band.h / 2 - side / 2;
+      const left = prev ? (prev.x + prev.w + run.x) / 2 : run.x - 4;
+      const right = next ? (run.x + run.w + next.x) / 2 : Math.min(px.w - 1, run.x + run.w + 8);
+      let minX = right, maxX = left, n = 0;
+      const x0 = Math.max(0, Math.floor(left));
+      const x1 = Math.min(px.w - 1, Math.ceil(right));
+      const y0 = Math.max(0, band.y);
+      const y1 = Math.min(px.h - 1, band.y + band.h - 1);
+      for (let y = y0; y <= y1; y++) {
+        for (let x = x0; x <= x1; x++) {
+          if (!bright(px, x, y)) continue;
+          n++;
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+        }
       }
-      return clampRect({ x:sx, y:sy, w:side, h:side }, px.w, px.h);
+      const span = n > 30 ? maxX - minX + 1 : Math.max(run.w, band.h);
+      const cx = n > 30 ? (minX + maxX) / 2 : run.x + run.w / 2;
+      return { cx:cx, span:span };
     });
+    const spans = measured.map((item) => item.span).sort((a, b) => a - b);
+    const mid = spans[Math.floor(spans.length / 2)];
+    const side = spans.filter((span) => span >= mid * 0.85)[0] || mid;
+    const cy = band.y + band.h / 2;
+    return measured.map((item) => clampRect({
+      x: item.cx - side / 2,
+      y: cy - side / 2,
+      w: side,
+      h: side
+    }, px.w, px.h));
   }
   function findRows(img) {
     const px = pixels(img);
