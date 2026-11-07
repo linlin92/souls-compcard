@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Comp card preview</title>
+<style>
+@font-face{font-family:"Cinzel";src:url(fonts/cinzel-700.woff2) format("woff2");font-weight:700;font-display:swap}
+:root{--bg:#14100b;--panel:#201912;--line:#4d3f27;--line2:#5a4a2e;--gold:#e3b95b;--gold2:#c99a3b;--ink:#f0e6d2;--mut:#a89a7c;--warn:#ffb35c}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;line-height:1.45;color:var(--ink);
+  background:radial-gradient(1100px 520px at 18% -8%,#2f2214 0,transparent 62%),repeating-linear-gradient(45deg,rgba(255,255,255,.014) 0 2px,transparent 2px 5px),var(--bg)}
+.wrap{max-width:980px;margin:0 auto;padding:1.4rem 1rem 3rem}
+h1{margin:0;font-family:"Cinzel","Palatino Linotype",Palatino,Georgia,serif;font-size:1.45rem;font-weight:700}
+.lead{margin:.35rem 0 1rem;color:var(--mut);max-width:40rem}
+.stage{display:flex;justify-content:center}
+canvas{width:min(100%,760px);height:auto;border-radius:16px;box-shadow:0 16px 40px rgba(0,0,0,.45)}
+.row{display:flex;gap:.6rem;flex-wrap:wrap;align-items:center;margin:.9rem 0}
+button{min-height:44px;padding:.5rem 1.1rem;border-radius:999px;border:1px solid #f3d98f;background:linear-gradient(180deg,#f0d487,#c99a3b);color:#1b1208;font:inherit;font-weight:700;cursor:pointer}
+button.ghost{background:transparent;border-color:var(--line2);color:var(--gold)}
+.ups{display:grid;grid-template-columns:1fr 1fr;gap:.8rem}
+.drop{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.25rem;text-align:center;min-height:148px;padding:.9rem;border:2px dashed var(--line2);border-radius:12px;background:rgba(0,0,0,.18);cursor:pointer}
+.drop:hover,.drop.over,.drop:focus-within{border-color:var(--gold);background:rgba(227,185,91,.07)}
+.drop b{font-size:1.02rem}
+.drop small{font-size:.82rem;color:var(--mut)}
+.drop input{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+.drop img{display:none;width:100%;height:84px;object-fit:cover;object-position:top;border-radius:8px;border:1px solid var(--line2)}
+.drop.has img{display:block}
+.priv{margin:.55rem 0 0;font-size:.78rem;color:var(--mut)}
+.phone{margin:1.2rem 0 0}
+.phone h2{margin:0 0 .4rem;font-family:"Cinzel","Palatino Linotype",Palatino,Georgia,serif;font-size:1.05rem;color:var(--gold);font-weight:700}
+.phone p{margin:.25rem 0;color:var(--mut);font-size:.92rem}
+.phone img{display:block;width:min(100%,400px);height:auto;border-radius:12px;border:1px solid var(--line2)}
+#status{color:var(--gold);min-height:1.2em}
+#status.err{color:var(--warn)}
+@media (max-width:760px){.ups{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<main class="wrap">
+  <h1>Comp card</h1>
+  <p class="lead">One image for the practice comp. The formation is the battle screenshot as shot. Under it, each hero with gear, rune, and artifact.</p>
+  <div class="ups">
+    <label class="drop" id="drop-battle">
+      <input id="file-battle" type="file" accept="image/*">
+      <img alt="">
+      <b>Formation</b>
+      <small>Battle screen, with the setup and speeds.</small>
+    </label>
+    <label class="drop" id="drop-lineup">
+      <input id="file-lineup" type="file" accept="image/*">
+      <img alt="">
+      <b>Loadout</b>
+      <small>Hero list, with gear, rune, and artifact.</small>
+    </label>
+  </div>
+  <p class="priv">Screenshots stay on this device. Nothing is uploaded.</p>
+  <p id="status">Reading the two screenshots…</p>
+  <div class="stage"><canvas id="card"></canvas></div>
+  <div class="row">
+    <button type="button" id="save">Save PNG</button>
+    <button type="button" class="ghost" id="copy">Copy image</button>
+  </div>
+  <section class="phone">
+    <h2>Phone width</h2>
+    <p>Discord fits the picture to the screen. This is about 400px wide, the width of a phone chat.</p>
+    <img id="phone" alt="Comp card at phone width">
+  </section>
+</main>
+<script>
+(function () {
+  const W = 760, PAD = 26;
+  const SANS = 'system-ui,-apple-system,"Segoe UI",Roboto,sans-serif';
+  const HEAD = '"Cinzel","Palatino Linotype",Palatino,Georgia,serif';
+  const T = { bg:"#14100b", line:"#4d3f27", line2:"#5a4a2e", gold:"#e3b95b", gold2:"#c99a3b", ink:"#f0e6d2", mut:"#a89a7c", warn:"#ffb35c", frame:"#17120c", elf:"#7dcea0" };
+
+  // Rects are in the sample screenshots' pixels. A denser phone shot is the same layout, scaled.
+  const LINE_REF = { w:555, h:1024 }, BATTLE_REF = { w:480, h:1024 };
+  const FORM = { x:96, y:84, w:290, h:198 };
+  const ROW0 = 566, PITCH = 90;
+  const HERO = { x:30, s:84 };
+  const GEAR_X = [116, 188, 260, 332], GEAR = { y:8, s:68 };
+  const RUNE = { x:392, y:2, s:74 };
+  const ARTIFACT = { x:462, y:4, s:70 };
+
+  function round(c, x, y, w, h, r) {
+    r = Math.min(r, w / 2, h / 2);
+    c.beginPath();
+    c.moveTo(x + r, y);
+    c.arcTo(x + w, y, x + w, y + h, r);
+    c.arcTo(x + w, y + h, x, y + h, r);
+    c.arcTo(x, y + h, x, y, r);
+    c.arcTo(x, y, x + w, y, r);
+    c.closePath();
+  }
+  // One scale for both axes when the shot is uniformly denser than the sample. Width wins if it was cropped.
+  function density(img, ref) {
+    const sx = img.naturalWidth / ref.w, sy = img.naturalHeight / ref.h;
+    return Math.abs(sx - sy) < 0.2 ? (sx + sy) / 2 : sx;
+  }
+  function box(rect, s) {
+    return { x: rect.x * s, y: rect.y * s, w: rect.w * s, h: rect.h * s };
+  }
+  function square(x, y, size, s) {
+    return box({ x:x, y:y, w:size, h:size }, s);
+  }
+  function blit(c, img, s, d, rad) {
+    c.save();
+    c.imageSmoothingEnabled = true;
+    c.imageSmoothingQuality = "high";
+    if (rad) { round(c, d.x, d.y, d.w, d.h, rad); c.clip(); }
+    c.drawImage(img, s.x, s.y, s.w, s.h, d.x, d.y, d.w, d.h);
+    c.restore();
+  }
+  function text(c, s, x, y, px, weight, color, align, font) {
+    c.font = weight + " " + px + "px " + (font || SANS);
+    c.fillStyle = color;
+    c.textAlign = align || "left";
+    c.textBaseline = "middle";
+    c.fillText(s, x, y);
+  }
+  function paint(c, lineup, battle) {
+    const inner = W - PAD * 2;
+    let y = PAD;
+
+    c.fillStyle = T.bg;
+    c.fillRect(0, 0, W, 2000);
+    const glow = c.createLinearGradient(0, 0, 0, 280);
+    glow.addColorStop(0, "rgba(227,185,91,.14)");
+    glow.addColorStop(1, "rgba(227,185,91,0)");
+    c.fillStyle = glow;
+    c.fillRect(0, 0, W, 280);
+
+    text(c, "COSSTA", PAD, y + 26, 40, "700", T.ink, "left", HEAD);
+    text(c, "82,537K", W - PAD, y + 22, 36, "700", T.gold, "right", HEAD);
+    text(c, "COMBAT POWER", W - PAD, y + 48, 11, "700", T.mut, "right");
+    text(c, "Awakened Soul", PAD, y + 58, 16, "600", T.mut, "left");
+
+    const guild = "ARTEMIS";
+    c.font = "700 13px " + SANS;
+    const gw = c.measureText(guild).width + 22;
+    round(c, PAD, y + 74, gw, 26, 13);
+    c.fillStyle = "rgba(227,185,91,.08)";
+    c.fill();
+    c.lineWidth = 1.5;
+    c.strokeStyle = T.gold2;
+    c.stroke();
+    text(c, guild, PAD + gw / 2, y + 87, 13, "700", T.gold, "center");
+
+    const field = "+15% ATK of Elf";
+    c.font = "600 14px " + SANS;
+    const fw = c.measureText(field).width + 22;
+    const fx = PAD + gw + 8;
+    round(c, fx, y + 74, fw, 26, 13);
+    c.strokeStyle = T.elf;
+    c.stroke();
+    text(c, field, fx + fw / 2, y + 87, 14, "600", T.elf, "center");
+    y += 118;
+
+    text(c, "FORMATION", PAD, y + 10, 13, "700", T.gold, "left");
+    y += 24;
+    const battleScale = density(battle, BATTLE_REF);
+    const form = box(FORM, battleScale);
+    const fh = Math.round(inner * (form.h / form.w));
+    c.save();
+    round(c, PAD, y, inner, fh, 14);
+    c.clip();
+    c.imageSmoothingEnabled = true;
+    c.imageSmoothingQuality = "high";
+    c.drawImage(battle, form.x, form.y, form.w, form.h, PAD, y, inner, fh);
+    c.restore();
+    c.save();
+    round(c, PAD, y, inner, fh, 14);
+    c.lineWidth = 2;
+    c.strokeStyle = T.line2;
+    c.stroke();
+    c.restore();
+    y += fh + 20;
+
+    text(c, "LOADOUT", PAD, y + 8, 13, "700", T.gold, "left");
+    y += 28;
+    // The shield is the rune. The piece on the right is the artifact. Every slot is the same square.
+    const lineScale = density(lineup, LINE_REF);
+    const tile = 92, gap = 8, slots = 6;
+    const rowW = slots * tile + (slots - 1) * gap;
+    const x0 = PAD + Math.max(0, (inner - rowW) / 2);
+    const gearX = x0 + (tile + gap);
+    const runeX = gearX + 4 * (tile + gap);
+    const artX = runeX + tile + gap;
+    text(c, "Gear", gearX + (tile * 4 + gap * 3) / 2, y, 12, "700", T.mut, "center");
+    text(c, "Rune", runeX + tile / 2, y, 12, "700", T.mut, "center");
+    text(c, "Artifact", artX + tile / 2, y, 12, "700", T.mut, "center");
+    y += 16;
+
+    for (let i = 0; i < 5; i++) {
+      const rowY = ROW0 + i * PITCH;
+      const rowH = tile + 16;
+      round(c, x0 - 8, y, rowW + 16, rowH, 12);
+      c.fillStyle = "rgba(0,0,0,.22)";
+      c.fill();
+      c.lineWidth = 1.5;
+      c.strokeStyle = T.line;
+      c.stroke();
+      const top = y + 8;
+      blit(c, lineup, square(HERO.x, rowY, HERO.s, lineScale), { x:x0, y:top, w:tile, h:tile }, 8);
+      GEAR_X.forEach((sx, k) => {
+        blit(c, lineup, square(sx, rowY + GEAR.y, GEAR.s, lineScale), { x:gearX + k * (tile + gap), y:top, w:tile, h:tile }, 8);
+      });
+      blit(c, lineup, square(RUNE.x, rowY + RUNE.y, RUNE.s, lineScale), { x:runeX, y:top, w:tile, h:tile }, 8);
+      blit(c, lineup, square(ARTIFACT.x, rowY + ARTIFACT.y, ARTIFACT.s, lineScale), { x:artX, y:top, w:tile, h:tile }, 8);
+      y += rowH + 8;
+    }
+    return y + 18;
+  }
+
+  function load(src) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error(src));
+      img.src = src;
+    });
+  }
+
+  const canvas = document.getElementById("card");
+  const phone = document.getElementById("phone");
+  const status = document.getElementById("status");
+  let lineup = null, battle = null, blob = null, seq = 0;
+
+  function setStatus(t, err) {
+    status.textContent = t;
+    status.className = err ? "err" : "";
+  }
+  // A denser screenshot keeps more pixels in the PNG. The sample is 1x, so the card is still drawn at 2x.
+  function outputScale() {
+    const s = Math.max(density(lineup, LINE_REF), density(battle, BATTLE_REF));
+    return Math.max(2, Math.min(4, Math.ceil(s)));
+  }
+  async function render() {
+    const n = ++seq;
+    if (!lineup || !battle) return;
+    const scale = outputScale();
+    const measure = document.createElement("canvas").getContext("2d");
+    const height = Math.ceil(paint(measure, lineup, battle));
+    if (n !== seq) return;
+    canvas.width = W * scale;
+    canvas.height = height * scale;
+    const c = canvas.getContext("2d");
+    c.setTransform(scale, 0, 0, scale, 0, 0);
+    c.imageSmoothingEnabled = true;
+    c.imageSmoothingQuality = "high";
+    paint(c, lineup, battle);
+    phone.src = canvas.toDataURL("image/png");
+    blob = await new Promise((res) => canvas.toBlob(res, "image/png"));
+    if (n === seq) setStatus("");
+  }
+  function readFile(file) {
+    return new Promise((resolve, reject) => {
+      if (!file || (file.type && !/^image\//.test(file.type))) { reject(new Error("Choose a picture.")); return; }
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => resolve({ img, url });
+      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("That picture could not be opened.")); };
+      img.src = url;
+    });
+  }
+  function bindSlot(dropId, fileId, assign) {
+    const drop = document.getElementById(dropId);
+    const input = document.getElementById(fileId);
+    const thumb = drop.querySelector("img");
+    let url = "";
+    const take = async (file) => {
+      setStatus("Reading that screenshot…");
+      try {
+        const got = await readFile(file);
+        if (url) URL.revokeObjectURL(url);
+        url = got.url;
+        thumb.src = url;
+        drop.classList.add("has");
+        assign(got.img);
+        await render();
+      } catch (e) {
+        setStatus(e.message || "That picture could not be opened.", true);
+      }
+    };
+    drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
+    drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+    drop.addEventListener("drop", (e) => {
+      e.preventDefault();
+      drop.classList.remove("over");
+      const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+      if (f) take(f);
+    });
+    input.addEventListener("change", () => { if (input.files[0]) take(input.files[0]); });
+  }
+
+  async function main() {
+    if (document.fonts && document.fonts.load) {
+      try { await document.fonts.load('700 40px "Cinzel"'); } catch (e) { /* Palatino stands in */ }
+    }
+    bindSlot("drop-lineup", "file-lineup", (img) => { lineup = img; });
+    bindSlot("drop-battle", "file-battle", (img) => { battle = img; });
+    const [line, form] = await Promise.all([
+      load("sample/lineup.jpg"),
+      load("sample/battle.png"),
+    ]);
+    lineup = line;
+    battle = form;
+    const lineThumb = document.querySelector("#drop-lineup img");
+    const formThumb = document.querySelector("#drop-battle img");
+    lineThumb.src = line.src;
+    formThumb.src = form.src;
+    document.getElementById("drop-lineup").classList.add("has");
+    document.getElementById("drop-battle").classList.add("has");
+    await render();
+  }
+
+  document.getElementById("save").onclick = () => {
+    if (!blob) return;
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "cossta-comp.png";
+    a.click();
+  };
+  document.getElementById("copy").onclick = async () => {
+    if (!blob || !navigator.clipboard || !window.ClipboardItem) {
+      status.textContent = "Copy isn’t available here. Save the PNG instead.";
+      return;
+    }
+    await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+    status.textContent = "Copied. Paste it into Discord.";
+  };
+
+  main().catch((err) => { status.textContent = "Could not draw the card. " + err.message; });
+})();
+</script>
+</body>
+</html>
