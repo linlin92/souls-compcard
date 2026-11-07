@@ -39,7 +39,7 @@ button.ghost{background:transparent;border-color:var(--line2);color:var(--gold)}
 <body>
 <main class="wrap">
   <h1>Comp card</h1>
-  <p class="lead">One image for the practice comp. The formation is the battle screenshot as shot. Under it, each hero with gear, rune, and artifact.</p>
+  <p class="lead">One image for the practice comp. The formation and the loadout are the screenshots as shot.</p>
   <div class="ups">
     <label class="drop" id="drop-battle">
       <input id="file-battle" type="file" accept="image/*">
@@ -175,49 +175,45 @@ button.ghost{background:transparent;border-color:var(--line2);color:var(--gold)}
     });
     return split;
   }
-  function slotRects(runs, band, px) {
-    const measured = runs.map((run, k) => {
-      const prev = k > 0 ? runs[k - 1] : null;
-      const next = k + 1 < runs.length ? runs[k + 1] : null;
-      const left = prev ? (prev.x + prev.w + run.x) / 2 : run.x - 4;
-      const right = next ? (run.x + run.w + next.x) / 2 : Math.min(px.w - 1, run.x + run.w + 8);
-      let minX = right, maxX = left, n = 0;
-      const x0 = Math.max(0, Math.floor(left));
-      const x1 = Math.min(px.w - 1, Math.ceil(right));
-      const y0 = Math.max(0, band.y);
-      const y1 = Math.min(px.h - 1, band.y + band.h - 1);
-      for (let y = y0; y <= y1; y++) {
-        for (let x = x0; x <= x1; x++) {
-          if (!bright(px, x, y)) continue;
-          n++;
-          if (x < minX) minX = x;
-          if (x > maxX) maxX = x;
-        }
-      }
-      const span = n > 30 ? maxX - minX + 1 : Math.max(run.w, band.h);
-      const cx = n > 30 ? (minX + maxX) / 2 : run.x + run.w / 2;
-      return { cx:cx, span:span };
-    });
-    const spans = measured.map((item) => item.span).sort((a, b) => a - b);
-    const mid = spans[Math.floor(spans.length / 2)];
-    const side = spans.filter((span) => span >= mid * 0.85)[0] || mid;
-    const cy = band.y + band.h / 2;
-    return measured.map((item) => clampRect({
-      x: item.cx - side / 2,
-      y: cy - side / 2,
-      w: side,
-      h: side
-    }, px.w, px.h));
-  }
-  function findRows(img) {
+  // One crop of the five hero rows, frames and all. Nothing is resized per icon.
+  function findLoadout(img) {
     const px = pixels(img);
     const rows = bands(px, px.h * 0.45).map((band) => {
-      const runs = columnRuns(px, band);
-      return runs.length === 7 ? { y:band.y, h:band.h, slots:slotRects(runs, band, px) } : null;
+      return columnRuns(px, band).length === 7 ? band : null;
     }).filter(Boolean);
     const five = rows.length > 5 ? rows.slice(-5) : rows;
     if (five.length !== 5) throw new Error("Could not find the five hero rows in that loadout.");
-    return five;
+    const rowH = five[0].h;
+    const y0 = Math.max(0, five[0].y - Math.round(rowH * 0.55));
+    const y1 = Math.min(px.h - 1, five[4].y + five[4].h + Math.round(rowH * 0.55));
+    const cols = new Array(px.w).fill(0);
+    const line = new Array(y1 - y0 + 1).fill(0);
+    for (let y = y0; y <= y1; y++) {
+      for (let x = 0; x < px.w; x++) {
+        if (!bright(px, x, y)) continue;
+        cols[x]++;
+        line[y - y0]++;
+      }
+    }
+    const colMin = Math.max(8, rowH * 0.15);
+    const lineMin = px.w * 0.02;
+    let left = cols.findIndex((n) => n >= colMin);
+    let right = cols.length - 1;
+    while (right > left && cols[right] < colMin) right--;
+    let top = line.findIndex((n) => n >= lineMin);
+    let bot = line.length - 1;
+    while (bot > top && line[bot] < lineMin) bot--;
+    if (left < 0 || top < 0 || right <= left) throw new Error("Could not find the five hero rows in that loadout.");
+    const pad = Math.max(4, Math.round(rowH * 0.08));
+    return {
+      anchorY: five[0].y,
+      rect: clampRect({
+        x: left - pad,
+        y: y0 + top - pad,
+        w: right - left + 1 + pad * 2,
+        h: bot - top + 1 + pad * 2
+      }, px.w, px.h)
+    };
   }
   function findFormation(img) {
     return clampRect({
@@ -226,14 +222,6 @@ button.ghost{background:transparent;border-color:var(--line2);color:var(--gold)}
       w: img.naturalWidth * FORM.w,
       h: img.naturalHeight * FORM.h
     }, img.naturalWidth, img.naturalHeight);
-  }
-  function blit(c, img, s, d, rad) {
-    c.save();
-    c.imageSmoothingEnabled = true;
-    c.imageSmoothingQuality = "high";
-    if (rad) { round(c, d.x, d.y, d.w, d.h, rad); c.clip(); }
-    c.drawImage(img, s.x, s.y, s.w, s.h, d.x, d.y, d.w, d.h);
-    c.restore();
   }
   function text(c, s, x, y, px, weight, color, align, font) {
     c.font = weight + " " + px + "px " + (font || SANS);
@@ -263,7 +251,7 @@ button.ghost{background:transparent;border-color:var(--line2);color:var(--gold)}
     text(c, label, x + w / 2, y + 13, 13, "700", color, "center");
     return w;
   }
-  function paint(c, lineup, battle, rows, form, info) {
+  function paint(c, lineup, battle, loadout, form, info) {
     const inner = W - PAD * 2;
     let y = PAD;
 
@@ -313,33 +301,23 @@ button.ghost{background:transparent;border-color:var(--line2);color:var(--gold)}
     y += fh + 20;
 
     text(c, "LOADOUT", PAD, y + 8, 13, "700", T.gold, "left");
-    y += 28;
-    // Hero, four gear, rune, then artifact. The rounded row has to hold all seven.
-    const tile = 92, gap = 8, count = 7;
-    const rowW = count * tile + (count - 1) * gap;
-    const x0 = PAD + Math.max(0, (inner - rowW) / 2);
-    const place = [];
-    for (let k = 0; k < count; k++) place.push(x0 + k * (tile + gap));
-    text(c, "Gear", (place[1] + place[4] + tile) / 2, y, 12, "700", T.mut, "center");
-    text(c, "Rune", place[5] + tile / 2, y, 12, "700", T.mut, "center");
-    text(c, "Artifact", place[6] + tile / 2, y, 12, "700", T.mut, "center");
-    y += 16;
-
-    rows.forEach((row) => {
-      const rowH = tile + 16;
-      round(c, x0 - 8, y, rowW + 16, rowH, 12);
-      c.fillStyle = "rgba(0,0,0,.22)";
-      c.fill();
-      c.lineWidth = 1.5;
-      c.strokeStyle = T.line;
-      c.stroke();
-      const top = y + 8;
-      row.slots.forEach((slot, k) => {
-        blit(c, lineup, slot, { x:place[k], y:top, w:tile, h:tile }, 8);
-      });
-      y += rowH + 8;
-    });
-    return y + 18;
+    y += 24;
+    const lh = Math.round(inner * (loadout.h / loadout.w));
+    c.save();
+    round(c, PAD, y, inner, lh, 14);
+    c.clip();
+    c.imageSmoothingEnabled = true;
+    c.imageSmoothingQuality = "high";
+    c.drawImage(lineup, loadout.x, loadout.y, loadout.w, loadout.h, PAD, y, inner, lh);
+    c.restore();
+    c.save();
+    round(c, PAD, y, inner, lh, 14);
+    c.lineWidth = 2;
+    c.strokeStyle = T.line2;
+    c.stroke();
+    c.restore();
+    y += lh + 20;
+    return y + 8;
   }
 
   const canvas = document.getElementById("card");
@@ -461,9 +439,9 @@ button.ghost{background:transparent;border-color:var(--line2);color:var(--gold)}
     const y = Math.max(Math.round(px.h * 0.025), bottom - Math.round(px.h * 0.105));
     return clampRect({ x:px.w * 0.15, y:y, w:px.w * 0.68, h:bottom - y - 4 }, px.w, px.h);
   }
-  function cpRect(img, row) {
+  function cpRect(img, anchorY) {
     const w = img.naturalWidth, h = img.naturalHeight;
-    return clampRect({ x:w * 0.08, y:row.y - h * 0.105, w:w * 0.55, h:h * 0.08 }, w, h);
+    return clampRect({ x:w * 0.08, y:anchorY - h * 0.105, w:w * 0.55, h:h * 0.08 }, w, h);
   }
   function fieldRect(img) {
     const px = pixels(img);
@@ -471,9 +449,9 @@ button.ghost{background:transparent;border-color:var(--line2);color:var(--gold)}
     const y = row ? row.y - px.h * 0.085 : px.h * 0.6;
     return clampRect({ x:px.w * 0.12, y:y, w:px.w * 0.72, h:px.h * 0.07 }, px.w, px.h);
   }
-  async function readInfo(lineupImg, battleImg, rows) {
+  async function readInfo(lineupImg, battleImg, anchorY) {
     const idText = await recognize(lineupImg, nameRect(lineupImg), 3);
-    const cpText = await recognize(lineupImg, cpRect(lineupImg, rows[0]));
+    const cpText = await recognize(lineupImg, cpRect(lineupImg, anchorY));
     const fieldText = await recognize(battleImg, fieldRect(battleImg));
     const id = parseIdentity(idText);
     return { name:id.name, guild:id.guild, cp:parseCP(cpText), field:parseField(fieldText) };
@@ -484,9 +462,9 @@ button.ghost{background:transparent;border-color:var(--line2);color:var(--gold)}
       setStatus(lineup || battle ? "Drop the other screenshot." : "");
       return;
     }
-    let rows, form;
+    let loadout, form;
     try {
-      rows = findRows(lineup);
+      loadout = findLoadout(lineup);
       form = findFormation(battle);
     } catch (e) {
       setStatus(e.message || "Could not read that loadout.", true);
@@ -495,12 +473,12 @@ button.ghost{background:transparent;border-color:var(--line2);color:var(--gold)}
     if (n !== seq) return;
     setStatus("Reading the name…");
     let info = { name:"", guild:"", cp:"", field:"" };
-    try { info = await readInfo(lineup, battle, rows); }
+    try { info = await readInfo(lineup, battle, loadout.anchorY); }
     catch (e) { /* The crops still draw when the name cannot be read. */ }
     if (n !== seq) return;
     const scale = outputScale();
     const measure = document.createElement("canvas").getContext("2d");
-    const height = Math.ceil(paint(measure, lineup, battle, rows, form, info));
+    const height = Math.ceil(paint(measure, lineup, battle, loadout.rect, form, info));
     if (n !== seq) return;
     canvas.width = W * scale;
     canvas.height = height * scale;
@@ -508,7 +486,7 @@ button.ghost{background:transparent;border-color:var(--line2);color:var(--gold)}
     c.setTransform(scale, 0, 0, scale, 0, 0);
     c.imageSmoothingEnabled = true;
     c.imageSmoothingQuality = "high";
-    paint(c, lineup, battle, rows, form, info);
+    paint(c, lineup, battle, loadout.rect, form, info);
     phone.src = canvas.toDataURL("image/png");
     blob = await new Promise((res) => canvas.toBlob(res, "image/png"));
     if (n === seq) setStatus("");
