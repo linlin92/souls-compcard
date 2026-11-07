@@ -277,8 +277,7 @@ button.ghost{background:transparent;border-color:var(--line2);color:var(--gold)}
       text(c, info.cp, W - PAD, y + 22, cpPx, "700", T.gold, "right", HEAD);
       text(c, "COMBAT POWER", W - PAD, y + 48, 11, "700", T.mut, "right");
     }
-    if (info.title) text(c, info.title, PAD, y + 58, 16, "600", T.mut, "left");
-    y += info.title ? 78 : 64;
+    y += 70;
     if (info.guild || info.field) {
       let x = PAD;
       if (info.guild) x += pill(c, info.guild, x, y, "rgba(227,185,91,.08)", T.gold2, T.gold) + 8;
@@ -307,16 +306,15 @@ button.ghost{background:transparent;border-color:var(--line2);color:var(--gold)}
 
     text(c, "LOADOUT", PAD, y + 8, 13, "700", T.gold, "left");
     y += 28;
-    // The shield is the rune. The piece on the right is the artifact. Every slot is the same square.
-    const tile = 92, gap = 8, slots = 6;
-    const rowW = slots * tile + (slots - 1) * gap;
+    // Hero, four gear, rune, then artifact. The rounded row has to hold all seven.
+    const tile = 92, gap = 8, count = 7;
+    const rowW = count * tile + (count - 1) * gap;
     const x0 = PAD + Math.max(0, (inner - rowW) / 2);
-    const gearX = x0 + (tile + gap);
-    const runeX = gearX + 4 * (tile + gap);
-    const artX = runeX + tile + gap;
-    text(c, "Gear", gearX + (tile * 4 + gap * 3) / 2, y, 12, "700", T.mut, "center");
-    text(c, "Rune", runeX + tile / 2, y, 12, "700", T.mut, "center");
-    text(c, "Artifact", artX + tile / 2, y, 12, "700", T.mut, "center");
+    const place = [];
+    for (let k = 0; k < count; k++) place.push(x0 + k * (tile + gap));
+    text(c, "Gear", (place[1] + place[4] + tile) / 2, y, 12, "700", T.mut, "center");
+    text(c, "Rune", place[5] + tile / 2, y, 12, "700", T.mut, "center");
+    text(c, "Artifact", place[6] + tile / 2, y, 12, "700", T.mut, "center");
     y += 16;
 
     rows.forEach((row) => {
@@ -328,7 +326,6 @@ button.ghost{background:transparent;border-color:var(--line2);color:var(--gold)}
       c.strokeStyle = T.line;
       c.stroke();
       const top = y + 8;
-      const place = [x0, gearX, gearX + (tile + gap), gearX + 2 * (tile + gap), gearX + 3 * (tile + gap), runeX, artX];
       row.slots.forEach((slot, k) => {
         blit(c, lineup, slot, { x:place[k], y:top, w:tile, h:tile }, 8);
       });
@@ -414,12 +411,8 @@ button.ghost{background:transparent;border-color:var(--line2);color:var(--gold)}
       if (!guild && caps.length === 1 && !/[a-z]/.test(line)) guild = caps[0];
       else rest.push(line);
     });
-    let title = "", name = "";
-    if (rest.length >= 2) {
-      name = rest[rest.length - 1];
-      title = rest.slice(0, -1).join(" ");
-    } else if (rest.length === 1) name = rest[0];
-    return { title:title, name:displayName(name), guild:guild };
+    const name = rest.length ? rest[rest.length - 1] : "";
+    return { name:displayName(name), guild:guild };
   }
   function parseCP(raw) {
     const hits = [...raw.matchAll(/(\d{1,3}(?:[, ]\d{3})+|\d{4,})\s*k/ig)];
@@ -475,7 +468,7 @@ button.ghost{background:transparent;border-color:var(--line2);color:var(--gold)}
     const cpText = await recognize(lineupImg, cpRect(lineupImg, rows[0]));
     const fieldText = await recognize(battleImg, fieldRect(battleImg));
     const id = parseIdentity(idText);
-    return { name:id.name, title:id.title, guild:id.guild, cp:parseCP(cpText), field:parseField(fieldText) };
+    return { name:id.name, guild:id.guild, cp:parseCP(cpText), field:parseField(fieldText) };
   }
   async function render() {
     const n = ++seq;
@@ -493,7 +486,7 @@ button.ghost{background:transparent;border-color:var(--line2);color:var(--gold)}
     }
     if (n !== seq) return;
     setStatus("Reading the name…");
-    let info = { name:"", title:"", guild:"", cp:"", field:"" };
+    let info = { name:"", guild:"", cp:"", field:"" };
     try { info = await readInfo(lineup, battle, rows); }
     catch (e) { /* The crops still draw when the name cannot be read. */ }
     if (n !== seq) return;
