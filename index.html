@@ -74,14 +74,8 @@ button.ghost{background:transparent;border-color:var(--line2);color:var(--gold)}
   const HEAD = '"Cinzel","Palatino Linotype",Palatino,Georgia,serif';
   const T = { bg:"#14100b", line:"#4d3f27", line2:"#5a4a2e", gold:"#e3b95b", gold2:"#c99a3b", ink:"#f0e6d2", mut:"#a89a7c", warn:"#ffb35c", frame:"#17120c", elf:"#7dcea0" };
 
-  // Rects are in the sample screenshots' pixels. A denser phone shot is the same layout, scaled.
-  const LINE_REF = { w:555, h:1024 }, BATTLE_REF = { w:480, h:1024 };
-  const FORM = { x:96, y:84, w:290, h:198 };
-  const ROW0 = 566, PITCH = 90;
-  const HERO = { x:30, s:84 };
-  const GEAR_X = [116, 188, 260, 332], GEAR = { y:8, s:68 };
-  const RUNE = { x:392, y:2, s:74 };
-  const ARTIFACT = { x:462, y:4, s:70 };
+  // The viewed team's arena, below the top combat power and above the other team.
+  const FORM = { x:0.13, y:0.094, w:0.73, h:0.20 };
 
   function round(c, x, y, w, h, r) {
     r = Math.min(r, w / 2, h / 2);
@@ -93,16 +87,137 @@ button.ghost{background:transparent;border-color:var(--line2);color:var(--gold)}
     c.arcTo(x, y, x + w, y, r);
     c.closePath();
   }
-  // One scale for both axes when the shot is uniformly denser than the sample. Width wins if it was cropped.
-  function density(img, ref) {
-    const sx = img.naturalWidth / ref.w, sy = img.naturalHeight / ref.h;
-    return Math.abs(sx - sy) < 0.2 ? (sx + sy) / 2 : sx;
+  function pixels(img) {
+    const w = img.naturalWidth, h = img.naturalHeight;
+    const c = document.createElement("canvas");
+    c.width = w;
+    c.height = h;
+    const g = c.getContext("2d", { willReadFrequently: true });
+    g.drawImage(img, 0, 0);
+    return { w:w, h:h, data:g.getImageData(0, 0, w, h).data };
   }
-  function box(rect, s) {
-    return { x: rect.x * s, y: rect.y * s, w: rect.w * s, h: rect.h * s };
+  function bright(px, x, y) {
+    const i = (y * px.w + x) * 4;
+    const r = px.data[i], g = px.data[i + 1], b = px.data[i + 2];
+    const max = r > g ? (r > b ? r : b) : (g > b ? g : b);
+    const min = r < g ? (r < b ? r : b) : (g < b ? g : b);
+    return max > 80 && (max - min > 28 || max > 140);
   }
-  function square(x, y, size, s) {
-    return box({ x:x, y:y, w:size, h:size }, s);
+  function clampRect(r, w, h) {
+    let x = Math.round(r.x), y = Math.round(r.y);
+    let rw = Math.round(r.w), rh = Math.round(r.h);
+    if (x + rw > w) x = w - rw;
+    if (y + rh > h) y = h - rh;
+    if (x < 0) { rw += x; x = 0; }
+    if (y < 0) { rh += y; y = 0; }
+    if (x + rw > w) rw = w - x;
+    if (y + rh > h) rh = h - y;
+    return { x:x, y:y, w:Math.max(1, rw), h:Math.max(1, rh) };
+  }
+  // Gear rows are the bright bands under the combat-power line. One phone's pixel offsets miss the next.
+  function bands(px, yMin) {
+    const thr = px.w * 0.12;
+    const found = [];
+    let start = -1;
+    for (let y = 0; y <= px.h; y++) {
+      let n = 0;
+      if (y < px.h) {
+        for (let x = 0; x < px.w; x++) if (bright(px, x, y)) n++;
+      }
+      const hot = y < px.h && n > thr && y > yMin;
+      if (hot && start < 0) start = y;
+      if (!hot && start >= 0) {
+        const h = y - start;
+        if (h >= px.h * 0.025 && h <= px.h * 0.09) found.push({ y:start, h:h });
+        start = -1;
+      }
+    }
+    return found;
+  }
+  function columnRuns(px, band) {
+    const thr = band.h * 0.35;
+    const cols = new Array(px.w).fill(0);
+    for (let y = band.y; y < band.y + band.h; y++) {
+      for (let x = 0; x < px.w; x++) if (bright(px, x, y)) cols[x]++;
+    }
+    const gapLimit = Math.max(4, px.w * 0.015);
+    const minW = px.w * 0.04;
+    const runs = [];
+    let s = -1;
+    for (let x = 0; x <= px.w; x++) {
+      const hot = x < px.w && cols[x] >= thr;
+      if (hot && s < 0) s = x;
+      if (!hot && s >= 0) {
+        const prev = runs[runs.length - 1];
+        if (prev && s - (prev.x + prev.w) <= gapLimit) prev.w = x - prev.x;
+        else if (x - s >= minW) runs.push({ x:s, w:x - s });
+        s = -1;
+      }
+    }
+    const widths = runs.map((r) => r.w).sort((a, b) => a - b);
+    const median = widths.length ? widths[Math.floor(widths.length / 2)] : 40;
+    const split = [];
+    runs.forEach((run) => {
+      const n = Math.round(run.w / Math.max(1, median));
+      if (n <= 1) { split.push(run); return; }
+      let left = run.x;
+      const right = run.x + run.w;
+      for (let k = 1; k < n; k++) {
+        const guess = left + median;
+        const a = Math.max(left + 4, guess - Math.floor(median / 3));
+        const b = Math.min(right - 4, guess + Math.floor(median / 3));
+        let best = guess, bestN = Infinity;
+        for (let x = a; x <= b; x++) if (cols[x] < bestN) { bestN = cols[x]; best = x; }
+        split.push({ x:left, w:Math.max(1, best - left) });
+        left = best + 1;
+      }
+      split.push({ x:left, w:Math.max(1, right - left) });
+    });
+    return split;
+  }
+  function slotRects(runs, band, px) {
+    return runs.map((run, k) => {
+      const prev = k > 0 ? runs[k - 1] : null;
+      const next = k + 1 < runs.length ? runs[k + 1] : null;
+      const edge = Math.round(px.w * 0.03);
+      const leftGap = prev ? (run.x - (prev.x + prev.w)) / 2 : edge;
+      const rightGap = next ? (next.x - (run.x + run.w)) / 2 : edge;
+      const x0 = run.x - leftGap;
+      const ww = run.w + leftGap + rightGap;
+      let side, sx, sy;
+      if (k === 0) {
+        const top = band.y - band.h * 0.42;
+        const bot = band.y + band.h + band.h * 0.50;
+        side = bot - top;
+        sx = run.x + run.w / 2 - side / 2;
+        sy = top;
+        const maxRight = next ? next.x - 2 : px.w;
+        if (sx + side > maxRight) sx = maxRight - side;
+      } else {
+        side = Math.max(ww, band.h + 8);
+        sx = x0 + ww / 2 - side / 2;
+        sy = band.y + band.h / 2 - side / 2;
+      }
+      return clampRect({ x:sx, y:sy, w:side, h:side }, px.w, px.h);
+    });
+  }
+  function findRows(img) {
+    const px = pixels(img);
+    const rows = bands(px, px.h * 0.45).map((band) => {
+      const runs = columnRuns(px, band);
+      return runs.length === 7 ? { y:band.y, h:band.h, slots:slotRects(runs, band, px) } : null;
+    }).filter(Boolean);
+    const five = rows.length > 5 ? rows.slice(-5) : rows;
+    if (five.length !== 5) throw new Error("Could not find the five hero rows in that loadout.");
+    return five;
+  }
+  function findFormation(img) {
+    return clampRect({
+      x: img.naturalWidth * FORM.x,
+      y: img.naturalHeight * FORM.y,
+      w: img.naturalWidth * FORM.w,
+      h: img.naturalHeight * FORM.h
+    }, img.naturalWidth, img.naturalHeight);
   }
   function blit(c, img, s, d, rad) {
     c.save();
@@ -119,48 +234,61 @@ button.ghost{background:transparent;border-color:var(--line2);color:var(--gold)}
     c.textBaseline = "middle";
     c.fillText(s, x, y);
   }
-  function paint(c, lineup, battle) {
+  function fit(c, s, maxW, px, weight, font) {
+    let size = px;
+    c.font = weight + " " + size + "px " + font;
+    while (size > 18 && c.measureText(s).width > maxW) {
+      size -= 2;
+      c.font = weight + " " + size + "px " + font;
+    }
+    return size;
+  }
+  function pill(c, label, x, y, fill, stroke, color) {
+    c.font = "700 13px " + SANS;
+    const w = c.measureText(label).width + 22;
+    round(c, x, y, w, 26, 13);
+    c.fillStyle = fill;
+    c.fill();
+    c.lineWidth = 1.5;
+    c.strokeStyle = stroke;
+    c.stroke();
+    text(c, label, x + w / 2, y + 13, 13, "700", color, "center");
+    return w;
+  }
+  function paint(c, lineup, battle, rows, form, info) {
     const inner = W - PAD * 2;
     let y = PAD;
 
     c.fillStyle = T.bg;
-    c.fillRect(0, 0, W, 2000);
+    c.fillRect(0, 0, W, 4000);
     const glow = c.createLinearGradient(0, 0, 0, 280);
     glow.addColorStop(0, "rgba(227,185,91,.14)");
     glow.addColorStop(1, "rgba(227,185,91,0)");
     c.fillStyle = glow;
     c.fillRect(0, 0, W, 280);
 
-    text(c, "COSSTA", PAD, y + 26, 40, "700", T.ink, "left", HEAD);
-    text(c, "82,537K", W - PAD, y + 22, 36, "700", T.gold, "right", HEAD);
-    text(c, "COMBAT POWER", W - PAD, y + 48, 11, "700", T.mut, "right");
-    text(c, "Awakened Soul", PAD, y + 58, 16, "600", T.mut, "left");
-
-    const guild = "ARTEMIS";
-    c.font = "700 13px " + SANS;
-    const gw = c.measureText(guild).width + 22;
-    round(c, PAD, y + 74, gw, 26, 13);
-    c.fillStyle = "rgba(227,185,91,.08)";
-    c.fill();
-    c.lineWidth = 1.5;
-    c.strokeStyle = T.gold2;
-    c.stroke();
-    text(c, guild, PAD + gw / 2, y + 87, 13, "700", T.gold, "center");
-
-    const field = "+15% ATK of Elf";
-    c.font = "600 14px " + SANS;
-    const fw = c.measureText(field).width + 22;
-    const fx = PAD + gw + 8;
-    round(c, fx, y + 74, fw, 26, 13);
-    c.strokeStyle = T.elf;
-    c.stroke();
-    text(c, field, fx + fw / 2, y + 87, 14, "600", T.elf, "center");
-    y += 118;
+    const cpW = info.cp ? 210 : 0;
+    if (info.name) {
+      const namePx = fit(c, info.name, inner - cpW - 16, 40, "700", HEAD);
+      text(c, info.name, PAD, y + 26, namePx, "700", T.ink, "left", HEAD);
+    }
+    if (info.cp) {
+      const cpPx = fit(c, info.cp, cpW, 36, "700", HEAD);
+      text(c, info.cp, W - PAD, y + 22, cpPx, "700", T.gold, "right", HEAD);
+      text(c, "COMBAT POWER", W - PAD, y + 48, 11, "700", T.mut, "right");
+    }
+    if (info.title) text(c, info.title, PAD, y + 58, 16, "600", T.mut, "left");
+    y += info.title ? 78 : 64;
+    if (info.guild || info.field) {
+      let x = PAD;
+      if (info.guild) x += pill(c, info.guild, x, y, "rgba(227,185,91,.08)", T.gold2, T.gold) + 8;
+      if (info.field) pill(c, info.field, x, y, "rgba(0,0,0,0)", T.elf, T.elf);
+      y += 40;
+    }
+    y += 8;
 
     text(c, "FORMATION", PAD, y + 10, 13, "700", T.gold, "left");
     y += 24;
-    const battleScale = density(battle, BATTLE_REF);
-    const form = box(FORM, battleScale);
     const fh = Math.round(inner * (form.h / form.w));
     c.save();
     round(c, PAD, y, inner, fh, 14);
@@ -180,7 +308,6 @@ button.ghost{background:transparent;border-color:var(--line2);color:var(--gold)}
     text(c, "LOADOUT", PAD, y + 8, 13, "700", T.gold, "left");
     y += 28;
     // The shield is the rune. The piece on the right is the artifact. Every slot is the same square.
-    const lineScale = density(lineup, LINE_REF);
     const tile = 92, gap = 8, slots = 6;
     const rowW = slots * tile + (slots - 1) * gap;
     const x0 = PAD + Math.max(0, (inner - rowW) / 2);
@@ -192,8 +319,7 @@ button.ghost{background:transparent;border-color:var(--line2);color:var(--gold)}
     text(c, "Artifact", artX + tile / 2, y, 12, "700", T.mut, "center");
     y += 16;
 
-    for (let i = 0; i < 5; i++) {
-      const rowY = ROW0 + i * PITCH;
+    rows.forEach((row) => {
       const rowH = tile + 16;
       round(c, x0 - 8, y, rowW + 16, rowH, 12);
       c.fillStyle = "rgba(0,0,0,.22)";
@@ -202,14 +328,12 @@ button.ghost{background:transparent;border-color:var(--line2);color:var(--gold)}
       c.strokeStyle = T.line;
       c.stroke();
       const top = y + 8;
-      blit(c, lineup, square(HERO.x, rowY, HERO.s, lineScale), { x:x0, y:top, w:tile, h:tile }, 8);
-      GEAR_X.forEach((sx, k) => {
-        blit(c, lineup, square(sx, rowY + GEAR.y, GEAR.s, lineScale), { x:gearX + k * (tile + gap), y:top, w:tile, h:tile }, 8);
+      const place = [x0, gearX, gearX + (tile + gap), gearX + 2 * (tile + gap), gearX + 3 * (tile + gap), runeX, artX];
+      row.slots.forEach((slot, k) => {
+        blit(c, lineup, slot, { x:place[k], y:top, w:tile, h:tile }, 8);
       });
-      blit(c, lineup, square(RUNE.x, rowY + RUNE.y, RUNE.s, lineScale), { x:runeX, y:top, w:tile, h:tile }, 8);
-      blit(c, lineup, square(ARTIFACT.x, rowY + ARTIFACT.y, ARTIFACT.s, lineScale), { x:artX, y:top, w:tile, h:tile }, 8);
       y += rowH + 8;
-    }
+    });
     return y + 18;
   }
 
@@ -222,17 +346,160 @@ button.ghost{background:transparent;border-color:var(--line2);color:var(--gold)}
     status.textContent = t;
     status.className = err ? "err" : "";
   }
-  // A denser screenshot keeps more pixels in the PNG. The sample is 1x, so the card is still drawn at 2x.
   function outputScale() {
-    const s = Math.max(density(lineup, LINE_REF), density(battle, BATTLE_REF));
-    return Math.max(2, Math.min(4, Math.ceil(s)));
+    const w = Math.max(lineup.naturalWidth, battle.naturalWidth);
+    return Math.max(2, Math.min(4, Math.ceil(w / 480)));
+  }
+  function loadScript(src) {
+    return new Promise((resolve, reject) => {
+      const s = document.createElement("script");
+      s.src = src;
+      s.onload = () => resolve();
+      s.onerror = () => reject(new Error("Could not load text recognition."));
+      document.head.appendChild(s);
+    });
+  }
+  let workerPromise = null;
+  function ocrWorker() {
+    if (!workerPromise) {
+      workerPromise = (async () => {
+        if (!window.Tesseract) {
+          await loadScript("https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js");
+        }
+        return Tesseract.createWorker("eng", 1, {
+          workerPath: "https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/worker.min.js",
+          corePath: "https://cdn.jsdelivr.net/npm/tesseract.js-core@5.1.1/tesseract-core-simd-lstm.wasm.js",
+          langPath: "https://cdn.jsdelivr.net/npm/@tesseract.js-data/eng@1.0.0/4.0.0"
+        });
+      })().catch((err) => { workerPromise = null; throw err; });
+    }
+    return workerPromise;
+  }
+  function cropCanvas(img, rect, scale) {
+    const c = document.createElement("canvas");
+    scale = scale || 2;
+    c.width = Math.max(1, Math.round(rect.w * scale));
+    c.height = Math.max(1, Math.round(rect.h * scale));
+    const g = c.getContext("2d");
+    g.imageSmoothingEnabled = true;
+    g.imageSmoothingQuality = "high";
+    g.drawImage(img, rect.x, rect.y, rect.w, rect.h, 0, 0, c.width, c.height);
+    return c;
+  }
+  async function recognize(img, rect, scale) {
+    const worker = await ocrWorker();
+    await worker.setParameters({ tessedit_pageseg_mode: "6" });
+    const out = await worker.recognize(cropCanvas(img, rect, scale || 2));
+    return (out && out.data && out.data.text) || "";
+  }
+  function textLines(raw) {
+    return raw.split(/\n/).map((s) => s.replace(/[|•·]/g, " ").replace(/\s+'\s*/g, "'").replace(/\s+/g, " ").trim()).filter((s) => {
+      const letters = (s.match(/[A-Za-z]/g) || []).length;
+      return letters >= 3 && !/lv\.?\s*\d/i.test(s);
+    });
+  }
+  function cleanLine(s) {
+    return s.replace(/^[^A-Za-z0-9]+/, "").replace(/[^A-Za-z0-9'’]+$/g, "").trim();
+  }
+  function displayName(name) {
+    const tag = name.match(/^([A-Z][a-z]{4,}[aeiouy])([a-z]{3})$/);
+    return (tag ? tag[1] + " " + tag[2] : name).toUpperCase();
+  }
+  function parseIdentity(raw) {
+    const lines = textLines(raw).map(cleanLine).filter(Boolean);
+    let guild = "";
+    const rest = [];
+    lines.forEach((line) => {
+      const caps = (line.match(/[A-Z][A-Z0-9]{2,15}/g) || []);
+      if (!guild && caps.length === 1 && !/[a-z]/.test(line)) guild = caps[0];
+      else rest.push(line);
+    });
+    let title = "", name = "";
+    if (rest.length >= 2) {
+      name = rest[rest.length - 1];
+      title = rest.slice(0, -1).join(" ");
+    } else if (rest.length === 1) name = rest[0];
+    return { title:title, name:displayName(name), guild:guild };
+  }
+  function parseCP(raw) {
+    const hits = [...raw.matchAll(/(\d{1,3}(?:[, ]\d{3})+|\d{4,})\s*k/ig)];
+    if (!hits.length) return "";
+    const digits = hits[hits.length - 1][1].replace(/[, ]/g, "");
+    if (digits.length <= 3) return digits + "K";
+    return digits.slice(0, -3) + "," + digits.slice(-3) + "K";
+  }
+  function factionName(word) {
+    const known = ["Elf", "Undead", "Demon", "Nature", "Human", "God", "Dragon"];
+    const key = word.toLowerCase();
+    const folded = key.replace(/i/g, "l");
+    return known.find((name) => name.toLowerCase() === key || name.toLowerCase() === folded)
+      || (word.charAt(0).toUpperCase() + word.slice(1).toLowerCase());
+  }
+  function parseField(raw) {
+    const flat = raw.replace(/\s+/g, " ").replace(/atkof/ig, "ATK of");
+    const m = flat.match(/\+?\s*(\d+)\s*%\s*ATK\s*of\s*([A-Za-z]+)/i);
+    if (!m) return "";
+    return "+" + m[1] + "% ATK of " + factionName(m[2]);
+  }
+  function pinkRow(px) {
+    for (let y = Math.round(px.h * 0.08); y < px.h * 0.28; y++) {
+      let n = 0;
+      const x0 = Math.round(px.w * 0.18), x1 = Math.round(px.w * 0.9);
+      for (let x = x0; x < x1; x++) {
+        const i = (y * px.w + x) * 4;
+        const r = px.data[i], g = px.data[i + 1], b = px.data[i + 2];
+        if (r > 170 && b > 110 && r > g + 30) n++;
+      }
+      if (n > px.w * 0.03) return y;
+    }
+    return Math.round(px.h * 0.15);
+  }
+  function nameRect(img) {
+    const px = pixels(img);
+    const bottom = pinkRow(px);
+    const y = Math.max(Math.round(px.h * 0.025), bottom - Math.round(px.h * 0.105));
+    return clampRect({ x:px.w * 0.15, y:y, w:px.w * 0.68, h:bottom - y - 4 }, px.w, px.h);
+  }
+  function cpRect(img, row) {
+    const w = img.naturalWidth, h = img.naturalHeight;
+    return clampRect({ x:w * 0.08, y:row.y - h * 0.105, w:w * 0.55, h:h * 0.08 }, w, h);
+  }
+  function fieldRect(img) {
+    const px = pixels(img);
+    const row = bands(px, px.h * 0.55).filter((b) => b.y < px.h * 0.82)[0];
+    const y = row ? row.y - px.h * 0.085 : px.h * 0.6;
+    return clampRect({ x:px.w * 0.12, y:y, w:px.w * 0.72, h:px.h * 0.07 }, px.w, px.h);
+  }
+  async function readInfo(lineupImg, battleImg, rows) {
+    const idText = await recognize(lineupImg, nameRect(lineupImg), 3);
+    const cpText = await recognize(lineupImg, cpRect(lineupImg, rows[0]));
+    const fieldText = await recognize(battleImg, fieldRect(battleImg));
+    const id = parseIdentity(idText);
+    return { name:id.name, title:id.title, guild:id.guild, cp:parseCP(cpText), field:parseField(fieldText) };
   }
   async function render() {
     const n = ++seq;
-    if (!lineup || !battle) return;
+    if (!lineup || !battle) {
+      setStatus(lineup || battle ? "Drop the other screenshot." : "");
+      return;
+    }
+    let rows, form;
+    try {
+      rows = findRows(lineup);
+      form = findFormation(battle);
+    } catch (e) {
+      setStatus(e.message || "Could not read that loadout.", true);
+      return;
+    }
+    if (n !== seq) return;
+    setStatus("Reading the name…");
+    let info = { name:"", title:"", guild:"", cp:"", field:"" };
+    try { info = await readInfo(lineup, battle, rows); }
+    catch (e) { /* The crops still draw when the name cannot be read. */ }
+    if (n !== seq) return;
     const scale = outputScale();
     const measure = document.createElement("canvas").getContext("2d");
-    const height = Math.ceil(paint(measure, lineup, battle));
+    const height = Math.ceil(paint(measure, lineup, battle, rows, form, info));
     if (n !== seq) return;
     canvas.width = W * scale;
     canvas.height = height * scale;
@@ -240,7 +507,7 @@ button.ghost{background:transparent;border-color:var(--line2);color:var(--gold)}
     c.setTransform(scale, 0, 0, scale, 0, 0);
     c.imageSmoothingEnabled = true;
     c.imageSmoothingQuality = "high";
-    paint(c, lineup, battle);
+    paint(c, lineup, battle, rows, form, info);
     phone.src = canvas.toDataURL("image/png");
     blob = await new Promise((res) => canvas.toBlob(res, "image/png"));
     if (n === seq) setStatus("");
