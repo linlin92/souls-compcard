@@ -168,18 +168,25 @@ button.ghost{background:transparent;border-color:var(--line2);color:var(--gold)}
     }
     const gapLimit = Math.max(4, px.w * 0.015);
     const minW = px.w * 0.04;
-    const runs = [];
+    // A dark artifact dips under the threshold for a few pixels. Join those slivers
+    // before the width check, or each piece is dropped and the row comes up short.
+    const pieces = [];
     let s = -1;
     for (let x = 0; x <= px.w; x++) {
       const hot = x < px.w && cols[x] >= thr;
       if (hot && s < 0) s = x;
       if (!hot && s >= 0) {
-        const prev = runs[runs.length - 1];
-        if (prev && s - (prev.x + prev.w) <= gapLimit) prev.w = x - prev.x;
-        else if (x - s >= minW) runs.push({ x:s, w:x - s });
+        pieces.push({ x:s, w:x - s });
         s = -1;
       }
     }
+    const joined = [];
+    pieces.forEach((piece) => {
+      const prev = joined[joined.length - 1];
+      if (prev && piece.x - (prev.x + prev.w) <= gapLimit) prev.w = piece.x + piece.w - prev.x;
+      else joined.push(piece);
+    });
+    const runs = joined.filter((piece) => piece.w >= minW);
     const widths = runs.map((r) => r.w).sort((a, b) => a - b);
     const median = widths.length ? widths[Math.floor(widths.length / 2)] : 40;
     const split = [];
@@ -581,6 +588,8 @@ button.ghost{background:transparent;border-color:var(--line2);color:var(--gold)}
     await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
     status.textContent = "Copied. Paste it into Discord.";
   };
+
+  if (location.search.indexOf("test=1") >= 0) window.SOULS = { findLoadout:findLoadout, findFormation:findFormation };
 
   main().catch((err) => { status.textContent = "Could not draw the card. " + err.message; });
 })();
