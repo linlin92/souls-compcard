@@ -55,7 +55,7 @@ button.ghost{background:transparent;border-color:var(--line2);color:var(--gold)}
     </label>
   </div>
   <p class="priv">Screenshots stay on this device. Nothing is uploaded.</p>
-  <p id="status">Reading the two screenshots…</p>
+  <p id="status"></p>
   <div class="stage"><canvas id="card"></canvas></div>
   <div class="row">
     <button type="button" id="save">Save PNG</button>
@@ -213,15 +213,6 @@ button.ghost{background:transparent;border-color:var(--line2);color:var(--gold)}
     return y + 18;
   }
 
-  function load(src) {
-    return new Promise((resolve, reject) => {
-      const img = new Image();
-      img.onload = () => resolve(img);
-      img.onerror = () => reject(new Error(src));
-      img.src = src;
-    });
-  }
-
   const canvas = document.getElementById("card");
   const phone = document.getElementById("phone");
   const status = document.getElementById("status");
@@ -300,26 +291,14 @@ button.ghost{background:transparent;border-color:var(--line2);color:var(--gold)}
     }
     bindSlot("drop-lineup", "file-lineup", (img) => { lineup = img; });
     bindSlot("drop-battle", "file-battle", (img) => { battle = img; });
-    const [line, form] = await Promise.all([
-      load("sample/lineup.jpg"),
-      load("sample/battle.png"),
-    ]);
-    lineup = line;
-    battle = form;
-    const lineThumb = document.querySelector("#drop-lineup img");
-    const formThumb = document.querySelector("#drop-battle img");
-    lineThumb.src = line.src;
-    formThumb.src = form.src;
-    document.getElementById("drop-lineup").classList.add("has");
-    document.getElementById("drop-battle").classList.add("has");
-    await render();
+    setStatus("");
   }
 
   document.getElementById("save").onclick = () => {
     if (!blob) return;
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = "cossta-comp.png";
+    a.download = "comp-card.png";
     a.click();
   };
   document.getElementById("copy").onclick = async () => {
