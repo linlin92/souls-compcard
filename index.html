@@ -25,9 +25,13 @@ h1{margin:0;font-family:"Cinzel","Palatino Linotype",Palatino,Georgia,serif;font
 .lead{margin:.35rem 0 1rem;color:var(--mut);max-width:40rem}
 .stage{display:flex;justify-content:center}
 canvas{width:min(100%,760px);height:auto;border-radius:16px;box-shadow:0 16px 40px rgba(0,0,0,.45)}
-.row{display:flex;gap:.6rem;flex-wrap:wrap;align-items:center;margin:.9rem 0}
 button{min-height:44px;padding:.5rem 1.1rem;border-radius:999px;border:1px solid #f3d98f;background:linear-gradient(180deg,#f0d487,#c99a3b);color:#1b1208;font:inherit;font-weight:700;cursor:pointer}
 button.ghost{background:transparent;border-color:var(--line2);color:var(--gold)}
+button:disabled{opacity:.45;cursor:default}
+button[hidden]{display:none}
+.share{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem;margin:.9rem 0}
+.share-msg{flex:1 1 12rem;min-width:0;font-size:.85rem;color:var(--mut)}
+.share-msg a{color:var(--gold)}
 .ups{display:grid;grid-template-columns:1fr 1fr;gap:.8rem}
 .drop{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.25rem;text-align:center;min-height:148px;padding:.9rem;border:2px dashed var(--line2);border-radius:12px;background:rgba(0,0,0,.18);cursor:pointer}
 .drop:hover,.drop.over,.drop:focus-within{border-color:var(--gold);background:rgba(227,185,91,.07)}
@@ -81,11 +85,14 @@ button.ghost{background:transparent;border-color:var(--line2);color:var(--gold)}
     </div>
   </div>
   <p class="priv">Screenshots stay on this device. Nothing is uploaded.</p>
+  <p class="priv">The player name is the lettering from the screenshot, so a custom font stays as it was drawn.</p>
   <p id="status"></p>
   <div class="stage"><canvas id="card"></canvas></div>
-  <div class="row">
-    <button type="button" id="save">Save PNG</button>
-    <button type="button" class="ghost" id="copy">Copy image</button>
+  <div class="share" role="group" aria-label="Share the comp as a picture">
+    <button type="button" data-share="native" hidden disabled>Share image</button>
+    <button type="button" class="ghost" data-share="copy" hidden disabled>Copy image</button>
+    <button type="button" class="ghost" data-share="dl" disabled>Download PNG</button>
+    <span class="share-msg" role="status" aria-live="polite"></span>
   </div>
   <section class="phone">
     <h2>Phone width</h2>
@@ -168,18 +175,25 @@ button.ghost{background:transparent;border-color:var(--line2);color:var(--gold)}
     }
     const gapLimit = Math.max(4, px.w * 0.015);
     const minW = px.w * 0.04;
-    const runs = [];
+    // A dark artifact dips under the threshold for a few pixels. Join those slivers
+    // before the width check, or each piece is dropped and the row comes up short.
+    const pieces = [];
     let s = -1;
     for (let x = 0; x <= px.w; x++) {
       const hot = x < px.w && cols[x] >= thr;
       if (hot && s < 0) s = x;
       if (!hot && s >= 0) {
-        const prev = runs[runs.length - 1];
-        if (prev && s - (prev.x + prev.w) <= gapLimit) prev.w = x - prev.x;
-        else if (x - s >= minW) runs.push({ x:s, w:x - s });
+        pieces.push({ x:s, w:x - s });
         s = -1;
       }
     }
+    const joined = [];
+    pieces.forEach((piece) => {
+      const prev = joined[joined.length - 1];
+      if (prev && piece.x - (prev.x + prev.w) <= gapLimit) prev.w = piece.x + piece.w - prev.x;
+      else joined.push(piece);
+    });
+    const runs = joined.filter((piece) => piece.w >= minW);
     const widths = runs.map((r) => r.w).sort((a, b) => a - b);
     const median = widths.length ? widths[Math.floor(widths.length / 2)] : 40;
     const split = [];
@@ -290,16 +304,23 @@ button.ghost{background:transparent;border-color:var(--line2);color:var(--gold)}
     c.fillRect(0, 0, W, 280);
 
     const cpW = info.cp ? 210 : 0;
-    if (info.name) {
-      const namePx = fit(c, info.name, inner - cpW - 16, 40, "700", HEAD);
-      text(c, info.name, PAD, y + 26, namePx, "700", T.ink, "left", HEAD);
+    let head = 70;
+    if (info.namePlate) {
+      const plate = info.namePlate.canvas;
+      const maxW = inner - cpW - 16;
+      const maxH = 48;
+      let dh = maxH;
+      let dw = dh * (plate.width / plate.height);
+      if (dw > maxW) { dw = maxW; dh = dw * (plate.height / plate.width); }
+      c.drawImage(plate, PAD, y + 4, dw, dh);
+      head = Math.max(head, Math.ceil(dh) + 16);
     }
     if (info.cp) {
       const cpPx = fit(c, info.cp, cpW, 36, "700", HEAD);
       text(c, info.cp, W - PAD, y + 22, cpPx, "700", T.gold, "right", HEAD);
       text(c, "COMBAT POWER", W - PAD, y + 48, 11, "700", T.mut, "right");
     }
-    y += 70;
+    y += head;
     if (info.guild || info.field) {
       let x = PAD;
       if (info.guild) x += pill(c, info.guild, x, y, "rgba(227,185,91,.08)", T.gold2, T.gold) + 8;
@@ -349,7 +370,7 @@ button.ghost{background:transparent;border-color:var(--line2);color:var(--gold)}
   const canvas = document.getElementById("card");
   const phone = document.getElementById("phone");
   const status = document.getElementById("status");
-  let lineup = null, battle = null, blob = null, seq = 0;
+  let lineup = null, battle = null, seq = 0, cardReady = false;
 
   function setStatus(t, err) {
     status.textContent = t;
@@ -395,36 +416,16 @@ button.ghost{background:transparent;border-color:var(--line2);color:var(--gold)}
     g.drawImage(img, rect.x, rect.y, rect.w, rect.h, 0, 0, c.width, c.height);
     return c;
   }
-  async function recognize(img, rect, scale) {
+  async function recognize(img, rect, scale, psm) {
     const worker = await ocrWorker();
-    await worker.setParameters({ tessedit_pageseg_mode: "6" });
+    await worker.setParameters({ tessedit_pageseg_mode: psm || "6" });
     const out = await worker.recognize(cropCanvas(img, rect, scale || 2));
     return (out && out.data && out.data.text) || "";
   }
-  function textLines(raw) {
-    return raw.split(/\n/).map((s) => s.replace(/[|•·]/g, " ").replace(/\s+'\s*/g, "'").replace(/\s+/g, " ").trim()).filter((s) => {
-      const letters = (s.match(/[A-Za-z]/g) || []).length;
-      return letters >= 3 && !/lv\.?\s*\d/i.test(s);
-    });
-  }
-  function cleanLine(s) {
-    return s.replace(/^[^A-Za-z0-9]+/, "").replace(/[^A-Za-z0-9'’]+$/g, "").trim();
-  }
-  function displayName(name) {
-    const tag = name.match(/^([A-Z][a-z]{4,}[aeiouy])([a-z]{3})$/);
-    return (tag ? tag[1] + " " + tag[2] : name).toUpperCase();
-  }
-  function parseIdentity(raw) {
-    const lines = textLines(raw).map(cleanLine).filter(Boolean);
-    let guild = "";
-    const rest = [];
-    lines.forEach((line) => {
-      const caps = (line.match(/[A-Z][A-Z0-9]{2,15}/g) || []);
-      if (!guild && caps.length === 1 && !/[a-z]/.test(line)) guild = caps[0];
-      else rest.push(line);
-    });
-    const name = rest.length ? rest[rest.length - 1] : "";
-    return { name:displayName(name), guild:guild };
+  // A guild token is one short word. Anything else is left off the card rather than guessed.
+  function parseGuild(raw) {
+    const words = raw.replace(/[^A-Za-z0-9\n ]/g, " ").split(/\s+/).filter((w) => /^[A-Za-z][A-Za-z0-9]{2,15}$/.test(w));
+    return words.length === 1 ? words[0].toUpperCase() : "";
   }
   function parseCP(raw) {
     const hits = [...raw.matchAll(/(\d{1,3}(?:[, ]\d{3})+|\d{4,})\s*k/ig)];
@@ -446,24 +447,123 @@ button.ghost{background:transparent;border-color:var(--line2);color:var(--gold)}
     if (!m) return "";
     return "+" + m[1] + "% ATK of " + factionName(m[2]);
   }
-  function pinkRow(px) {
-    for (let y = Math.round(px.h * 0.08); y < px.h * 0.28; y++) {
-      let n = 0;
-      const x0 = Math.round(px.w * 0.18), x1 = Math.round(px.w * 0.9);
-      for (let x = x0; x < x1; x++) {
-        const i = (y * px.w + x) * 4;
-        const r = px.data[i], g = px.data[i + 1], b = px.data[i + 2];
-        if (r > 170 && b > 110 && r > g + 30) n++;
-      }
-      if (n > px.w * 0.03) return y;
-    }
-    return Math.round(px.h * 0.15);
+  function isRed(r, g, b) { return r > 150 && r > g + 40 && r > b + 25 && g < 140; }
+  function isLight(r, g, b) {
+    const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+    return mx > 140 && mn > 70 && mx - mn < 90 && !isRed(r, g, b);
   }
-  function nameRect(img) {
+  // The red line beside the portrait is the title. The light line under it is the player name.
+  function findNameRect(px) {
+    const w = px.w, h = px.h;
+    const y0 = Math.floor(h * 0.045), y1 = Math.floor(h * 0.085);
+    const col = new Array(w).fill(0);
+    for (let y = y0; y < y1; y++) {
+      for (let x = Math.floor(w * 0.08); x < w * 0.72; x++) {
+        const i = (y * w + x) * 4;
+        if (isRed(px.data[i], px.data[i + 1], px.data[i + 2])) col[x]++;
+      }
+    }
+    const hot = [];
+    col.forEach((n, x) => { if (n >= 3) hot.push(x); });
+    const gapJoin = Math.max(8, Math.floor(w * 0.012));
+    const titleRuns = [];
+    let s = -1, p = -1;
+    hot.concat([1e9]).forEach((x) => {
+      if (s < 0) { s = p = x; return; }
+      if (x <= p + gapJoin) { p = x; return; }
+      if (p - s > w * 0.03) titleRuns.push([s, p]);
+      s = p = x;
+    });
+    if (!titleRuns.length) return null;
+    const left = titleRuns[0][0];
+    const x0 = Math.max(0, left - 4), x1 = Math.min(w - 1, left + Math.floor(w * 0.55));
+    const minRow = Math.max(6, Math.floor(w * 0.018));
+    const ys = [];
+    for (let y = y1 - 2; y < h * 0.125; y++) {
+      let n = 0;
+      for (let x = x0; x < x1; x++) {
+        const i = (y * w + x) * 4;
+        if (isLight(px.data[i], px.data[i + 1], px.data[i + 2])) n++;
+      }
+      if (n >= minRow) ys.push(y);
+    }
+    if (!ys.length) return null;
+    const clusters = [];
+    s = p = ys[0];
+    ys.concat([1e9]).slice(1).forEach((y) => {
+      if (y <= p + 2) { p = y; return; }
+      clusters.push([s, p]);
+      s = p = y;
+    });
+    let a = clusters[0][0], b = clusters[0][1];
+    const rowN = (y) => {
+      let n = 0;
+      for (let x = x0; x < x1; x++) {
+        const i = (y * w + x) * 4;
+        if (isLight(px.data[i], px.data[i + 1], px.data[i + 2])) n++;
+      }
+      return n;
+    };
+    const widen = Math.max(4, Math.floor(w * 0.008));
+    while (a > h * 0.04 && rowN(a - 1) >= widen) a--;
+    while (b < h * 0.13 && rowN(b + 1) >= widen) b++;
+    const need = Math.max(2, Math.floor((b - a + 1) * 0.2));
+    const cols = [];
+    for (let x = x0; x < x1; x++) {
+      let n = 0;
+      for (let y = a; y <= b; y++) {
+        const i = (y * w + x) * 4;
+        if (isLight(px.data[i], px.data[i + 1], px.data[i + 2])) n++;
+      }
+      if (n >= need) cols.push(x);
+    }
+    if (!cols.length) return null;
+    const gap = Math.max(6, Math.floor(w * 0.02));
+    const runs = [];
+    s = p = -1;
+    cols.concat([1e9]).forEach((x) => {
+      if (s < 0) { s = p = x; return; }
+      if (x <= p + gap) { p = x; return; }
+      runs.push([s, p]);
+      s = p = x;
+    });
+    let run = runs.find((r) => r[0] - gap <= left && left <= r[1] + gap) || runs[0];
+    return clampRect({ x:run[0] - 2, y:a - 2, w:run[1] - run[0] + 6, h:b - a + 5 }, w, h);
+  }
+  // Glyphs only. The scene behind the name is dropped so a custom font can sit on the card.
+  function findNamePlate(img) {
     const px = pixels(img);
-    const bottom = pinkRow(px);
-    const y = Math.max(Math.round(px.h * 0.025), bottom - Math.round(px.h * 0.105));
-    return clampRect({ x:px.w * 0.15, y:y, w:px.w * 0.68, h:bottom - y - 4 }, px.w, px.h);
+    const rect = findNameRect(px);
+    if (!rect || rect.w < px.w * 0.06 || rect.h < 6) return null;
+    const c = document.createElement("canvas");
+    c.width = rect.w;
+    c.height = rect.h;
+    const g = c.getContext("2d");
+    g.drawImage(img, rect.x, rect.y, rect.w, rect.h, 0, 0, rect.w, rect.h);
+    const im = g.getImageData(0, 0, rect.w, rect.h);
+    const d = im.data;
+    const core = new Uint8Array(rect.w * rect.h);
+    for (let p = 0, i = 0; p < core.length; p++, i += 4) if (isLight(d[i], d[i + 1], d[i + 2])) core[p] = 1;
+    for (let y = 0; y < rect.h; y++) {
+      for (let x = 0; x < rect.w; x++) {
+        let near = false;
+        for (let dy = -1; dy <= 1 && !near; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            const xx = x + dx, yy = y + dy;
+            if (xx >= 0 && yy >= 0 && xx < rect.w && yy < rect.h && core[yy * rect.w + xx]) near = true;
+          }
+        }
+        const i = (y * rect.w + x) * 4;
+        d[i + 3] = near && Math.max(d[i], d[i + 1], d[i + 2]) > 85 ? 255 : 0;
+      }
+    }
+    g.putImageData(im, 0, 0);
+    return { canvas:c, rect:rect };
+  }
+  function guildRect(img, name) {
+    const w = img.naturalWidth, h = img.naturalHeight;
+    const y = name.y + name.h + Math.round(name.h * 0.2);
+    return clampRect({ x:name.x, y:y, w:Math.max(name.w, w * 0.28), h:Math.round(name.h * 1.4) }, w, h);
   }
   function cpRect(img, anchorY) {
     const w = img.naturalWidth, h = img.naturalHeight;
@@ -475,16 +575,21 @@ button.ghost{background:transparent;border-color:var(--line2);color:var(--gold)}
     const y = row ? row.y - px.h * 0.085 : px.h * 0.6;
     return clampRect({ x:px.w * 0.12, y:y, w:px.w * 0.72, h:px.h * 0.07 }, px.w, px.h);
   }
-  async function readInfo(lineupImg, battleImg, anchorY) {
-    const idText = await recognize(lineupImg, nameRect(lineupImg), 3);
+  async function readInfo(lineupImg, battleImg, anchorY, name) {
     const cpText = await recognize(lineupImg, cpRect(lineupImg, anchorY));
     const fieldText = await recognize(battleImg, fieldRect(battleImg));
-    const id = parseIdentity(idText);
-    return { name:id.name, guild:id.guild, cp:parseCP(cpText), field:parseField(fieldText) };
+    let guild = "";
+    if (name) {
+      try { guild = parseGuild(await recognize(lineupImg, guildRect(lineupImg, name), 3, "7")); }
+      catch (e) { guild = ""; }
+    }
+    return { guild:guild, cp:parseCP(cpText), field:parseField(fieldText) };
   }
   async function render() {
     const n = ++seq;
     if (!lineup || !battle) {
+      cardReady = false;
+      shareButtons(true);
       setStatus(lineup || battle ? "Drop the other screenshot." : "");
       return;
     }
@@ -493,14 +598,25 @@ button.ghost{background:transparent;border-color:var(--line2);color:var(--gold)}
       loadout = findLoadout(lineup);
       form = findFormation(battle);
     } catch (e) {
+      cardReady = false;
+      shareButtons(true);
+      shareSay("");
       setStatus(e.message || "Could not read that loadout.", true);
       return;
     }
     if (n !== seq) return;
-    setStatus("Reading the name…");
-    let info = { name:"", guild:"", cp:"", field:"" };
-    try { info = await readInfo(lineup, battle, loadout.anchorY); }
-    catch (e) { /* The crops still draw when the name cannot be read. */ }
+    setStatus("Reading the header…");
+    cardReady = false;
+    shareButtons(true);
+    shareSay("Preparing image\u2026");
+    const namePlate = findNamePlate(lineup);
+    let info = { guild:"", cp:"", field:"", namePlate:namePlate };
+    try {
+      const read = await readInfo(lineup, battle, loadout.anchorY, namePlate && namePlate.rect);
+      info.guild = read.guild;
+      info.cp = read.cp;
+      info.field = read.field;
+    } catch (e) { /* The crops still draw when the header text cannot be read. */ }
     if (n !== seq) return;
     const scale = outputScale();
     const measure = document.createElement("canvas").getContext("2d");
@@ -514,8 +630,11 @@ button.ghost{background:transparent;border-color:var(--line2);color:var(--gold)}
     c.imageSmoothingQuality = "high";
     paint(c, lineup, battle, loadout.rect, form, info);
     phone.src = canvas.toDataURL("image/png");
-    blob = await new Promise((res) => canvas.toBlob(res, "image/png"));
-    if (n === seq) setStatus("");
+    if (n !== seq) return;
+    cardReady = true;
+    shareButtons(false);
+    if (shareMsg.textContent.indexOf("Preparing") === 0) shareSay("");
+    setStatus(namePlate ? "" : "The player name could not be cut out of that header.");
   }
   function readFile(file) {
     return new Promise((resolve, reject) => {
@@ -566,21 +685,103 @@ button.ghost{background:transparent;border-color:var(--line2);color:var(--gold)}
     setStatus("");
   }
 
-  document.getElementById("save").onclick = () => {
-    if (!blob) return;
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = "comp-card.png";
-    a.click();
-  };
-  document.getElementById("copy").onclick = async () => {
-    if (!blob || !navigator.clipboard || !window.ClipboardItem) {
-      status.textContent = "Copy isn’t available here. Save the PNG instead.";
-      return;
+  // Same picture actions as SOULS Organizer. Copy is offered only where an image can be put on the
+  // clipboard, and the blob is a promise made inside the click so the phone keeps that tap's permission.
+  const NATIVE_OK = typeof navigator.share === "function";
+  const COPY_OK = (() => {
+    try {
+      if (!(navigator.clipboard && typeof navigator.clipboard.write === "function" && typeof window.ClipboardItem === "function")) return false;
+      if (typeof ClipboardItem.supports === "function" && ClipboardItem.supports("image/png") === false) return false;
+      return true;
+    } catch (e) { return false; }
+  })();
+  let COPY_BROKEN = false;
+  const SHARE_NAME = "souls-comp-card.png";
+  const shareMsg = document.querySelector(".share-msg");
+  let SHARE_URL = null;
+  function shareButtons(forceOff) {
+    document.querySelectorAll("[data-share]").forEach((b) => { b.disabled = forceOff || !cardReady; });
+  }
+  function shareChrome() {
+    document.querySelectorAll('[data-share="native"]').forEach((b) => { b.hidden = !NATIVE_OK; });
+    document.querySelectorAll('[data-share="copy"]').forEach((b) => { b.hidden = !COPY_OK || COPY_BROKEN; });
+  }
+  function shareSay(text, link) {
+    if (!shareMsg) return;
+    shareMsg.textContent = text || "";
+    if (link) {
+      const a = document.createElement("a");
+      a.href = link.href;
+      a.target = "_blank";
+      a.rel = "noopener";
+      a.textContent = link.text;
+      shareMsg.append(" ", a);
     }
-    await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
-    status.textContent = "Copied. Paste it into Discord.";
-  };
+  }
+  function pngPromise() {
+    return new Promise((resolve, reject) => {
+      if (!canvas.width) { reject(new Error("The picture could not be made")); return; }
+      canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("The picture could not be made"))), "image/png");
+    });
+  }
+  function lastBlobUrl(blob) {
+    if (SHARE_URL) URL.revokeObjectURL(SHARE_URL);
+    SHARE_URL = URL.createObjectURL(blob);
+    return SHARE_URL;
+  }
+  shareChrome();
+  shareButtons(true);
+  document.addEventListener("click", async (e) => {
+    const b = e.target.closest("[data-share]");
+    if (!b || b.disabled) return;
+    const say = (t, l) => shareSay(t, l);
+    const act = b.dataset.share;
+    shareButtons(true);
+    say("Making the picture\u2026");
+    try {
+      if (act === "copy") {
+        try {
+          await navigator.clipboard.write([new ClipboardItem({ "image/png": pngPromise() })]);
+          say("Copied. Paste it into Discord.");
+        } catch (err) {
+          if (err && err.name === "AbortError") { say(""); return; }
+          COPY_BROKEN = true;
+          document.querySelectorAll('[data-share="copy"]').forEach((x) => { x.hidden = true; });
+          say("This browser does not let a page copy a picture. Use Download PNG" + (NATIVE_OK ? " or Share image." : "."));
+        }
+      } else if (act === "native") {
+        const blob = await pngPromise();
+        const file = new File([blob], SHARE_NAME, { type: "image/png" });
+        let can = false;
+        try { can = !navigator.canShare || navigator.canShare({ files: [file] }); } catch (err) { can = false; }
+        if (!can) {
+          say("This browser cannot share a picture file. Use Download PNG.", { href: lastBlobUrl(blob), text: "Or open the picture and press and hold it to save." });
+          return;
+        }
+        try { await navigator.share({ files: [file], title: "SOULS Comp Card" }); say("Shared."); }
+        catch (err) { say(err && err.name === "AbortError" ? "" : "Could not share the picture. Use Download PNG."); }
+      } else {
+        const blob = await pngPromise();
+        const url = lastBlobUrl(blob);
+        if ("download" in HTMLAnchorElement.prototype) {
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = SHARE_NAME;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          say("Saved as " + SHARE_NAME + ".", { href: url, text: "Nothing saved? Open the picture and press and hold it." });
+        } else {
+          window.open(url, "_blank", "noopener");
+          say("Press and hold the picture to save it.", { href: url, text: "Open the picture" });
+        }
+      }
+    } catch (err) {
+      say("Could not make the picture" + (err && err.message ? " (" + err.message + ")" : "") + ". Please try again.");
+    } finally { shareButtons(false); }
+  });
+
+  if (location.search.indexOf("test=1") >= 0) window.SOULS = { findLoadout:findLoadout, findFormation:findFormation, findNamePlate:findNamePlate };
 
   main().catch((err) => { status.textContent = "Could not draw the card. " + err.message; });
 })();
